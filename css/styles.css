@@ -259,7 +259,8 @@ input[type="search"] {
   margin-bottom: 14px;
 }
 #map {
-  height: 260px;
+  height: min(42vh, 340px);
+  min-height: 280px;
   width: 100%;
   border-radius: 22px;
   border: 3px solid var(--line);

@@ -125,11 +125,29 @@
   function ensureMap() {
     if (map || typeof L === "undefined") return;
     map = L.map("map", { zoomControl: true, attributionControl: true });
-    L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+    const esri = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+      {
+        maxZoom: 19,
+        attribution:
+          "Tiles &copy; Esri &mdash; Source: Esri, OpenStreetMap",
+        errorTileUrl:
+          "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      }
+    );
+    const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, Tiles &copy; HOT',
-    }).addTo(map);
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    });
+    let usingFallback = false;
+    esri.on("tileerror", () => {
+      if (usingFallback || !map.hasLayer(esri)) return;
+      usingFallback = true;
+      map.removeLayer(esri);
+      osm.addTo(map);
+    });
+    esri.addTo(map);
     markersLayer = L.layerGroup().addTo(map);
     userLayer = L.layerGroup().addTo(map);
     map.setView([22.3027, 114.1772], 12);
