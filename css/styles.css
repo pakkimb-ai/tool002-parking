@@ -265,7 +265,7 @@ input[type="search"] {
   border: 3px solid var(--line);
   box-shadow: var(--shadow);
   z-index: 1;
-  background: #dceefc;
+  background: #e8eef4;
 }
 .map-hint {
   margin: 8px 2px 0;
