@@ -287,3 +287,56 @@ input[type="search"] {
 }
 .leaflet-popup-content .pop-name { font-size: 0.95rem; margin-bottom: 4px; }
 .leaflet-popup-content .pop-meta { font-size: 0.8rem; color: #555; }
+
+/* Self location marker */
+.you-marker { background: transparent; border: 0; }
+.you-dot {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #9fe0ff 0%, #5ec8ff 45%, #1a8fd0 100%);
+  border: 3px solid #2a1f14;
+  box-shadow: 0 0 0 4px rgba(94, 200, 255, 0.45), 0 3px 0 #2a1f14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: you-pulse 2s ease-in-out infinite;
+}
+.you-dot span {
+  font-size: 0.72rem;
+  font-weight: 900;
+  color: #0a2a40;
+  line-height: 1;
+}
+@keyframes you-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(94, 200, 255, 0.45), 0 3px 0 #2a1f14; }
+  50% { box-shadow: 0 0 0 10px rgba(94, 200, 255, 0.15), 0 3px 0 #2a1f14; }
+}
+
+/* Tighter park cards */
+.park-card {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  gap: 10px;
+}
+.vac-stack { min-width: 3.4rem; gap: 4px; }
+.vac-badge {
+  font-size: 1.2rem;
+  padding: 6px 4px 4px;
+  border-radius: 12px;
+}
+.vac-badge .lbl { font-size: 0.58rem; }
+.vac-badge.mc { font-size: 1rem; }
+.park-body h2 {
+  font-size: 0.98rem;
+  margin: 0 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.park-addr { display: none; }
+.meta-row { gap: 5px; }
+.chip {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+}

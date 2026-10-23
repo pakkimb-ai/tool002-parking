@@ -17,14 +17,13 @@
 
   let parksInfo = [];
   let vacancyMap = new Map();
-  let userPos = null; // { lat, lng }
+  let userPos = null; // { lat, lng, accuracy }
   let geoDenied = false;
   let timer = null;
   let map = null;
   let markersLayer = null;
-  let userMarker = null;
+  let userLayer = null;
   const markerById = new Map();
-
 
   function setStatus(msg, kind = "info") {
     geoStatus.textContent = msg;
@@ -62,7 +61,6 @@
     };
   }
 
-  /** Display string + CSS class for vacancy badge */
   function vacDisplay(info) {
     if (!info) return { text: "—", cls: "unk", title: "無資料" };
     const { type, vacancy } = info;
@@ -70,7 +68,6 @@
       return { text: "?", cls: "unk", title: "暫無空位數" };
     }
     if (type === "B") {
-      // 0 = full / no space, 1 = has space (common convention)
       if (vacancy === 0) return { text: "滿", cls: "full", title: "已滿" };
       if (vacancy === 1) return { text: "有", cls: "ok", title: "尚有空位" };
       return { text: String(vacancy), cls: "unk", title: "狀態碼" };
@@ -80,27 +77,16 @@
       const cls = n <= 0 ? "full" : n < 20 ? "low" : "ok";
       return { text: `${n}%`, cls, title: "空置率" };
     }
-    // type A = count
     const n = Number(vacancy);
     if (n <= 0) return { text: "0", cls: "full", title: "已滿" };
     if (n <= 5) return { text: String(n), cls: "low", title: "所餘無幾" };
     return { text: String(n), cls: "ok", title: "空位數" };
   }
 
-  function heightText(limits) {
-    if (!Array.isArray(limits) || !limits.length) return null;
-    const h = limits[0];
-    if (h == null || h.height == null) return h?.remark || null;
-    const rem = h.remark ? `（${h.remark}）` : "";
-    return `限高 ${h.height} m${rem}`;
-  }
-
-  function openingChip(status) {
-    if (!status) return "";
-    const open = String(status).toUpperCase() === "OPEN";
-    return `<span class="chip ${open ? "open" : "closed"}">${
-      open ? "開放中" : "已關閉／休息"
-    }</span>`;
+  function shortName(name) {
+    const s = String(name || "").trim();
+    if (s.length <= 22) return s;
+    return s.slice(0, 20) + "…";
   }
 
   async function fetchJson(url) {
@@ -136,7 +122,6 @@
       .replace(/"/g, "&quot;");
   }
 
-
   function ensureMap() {
     if (map || typeof L === "undefined") return;
     map = L.map("map", { zoomControl: true, attributionControl: true });
@@ -145,12 +130,41 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
     }).addTo(map);
     markersLayer = L.layerGroup().addTo(map);
+    userLayer = L.layerGroup().addTo(map);
     map.setView([22.3027, 114.1772], 12);
   }
 
   function vacShort(info) {
-    const d = vacDisplay(info);
-    return d.text;
+    return vacDisplay(info).text;
+  }
+
+  function updateUserOnMap() {
+    ensureMap();
+    if (!map || !userLayer) return;
+    userLayer.clearLayers();
+    if (!userPos) return;
+
+    const latlng = [userPos.lat, userPos.lng];
+    const acc = Math.min(Math.max(userPos.accuracy || 40, 25), 200);
+
+    L.circle(latlng, {
+      radius: acc,
+      color: "#1a8fd0",
+      weight: 1,
+      fillColor: "#5ec8ff",
+      fillOpacity: 0.18,
+      interactive: false,
+    }).addTo(userLayer);
+
+    const youIcon = L.divIcon({
+      className: "you-marker",
+      html: '<div class="you-dot"><span>你</span></div>',
+      iconSize: [36, 36],
+      iconAnchor: [18, 18],
+    });
+    L.marker(latlng, { icon: youIcon, zIndexOffset: 1000 })
+      .bindPopup("你嘅位置")
+      .addTo(userLayer);
   }
 
   function updateMap(rows) {
@@ -158,23 +172,12 @@
     if (!map) return;
     markersLayer.clearLayers();
     markerById.clear();
+    updateUserOnMap();
+
     const bounds = [];
+    if (userPos) bounds.push([userPos.lat, userPos.lng]);
 
-    if (userPos) {
-      if (userMarker) map.removeLayer(userMarker);
-      userMarker = L.circleMarker([userPos.lat, userPos.lng], {
-        radius: 9,
-        color: "#2a1f14",
-        weight: 3,
-        fillColor: "#5ec8ff",
-        fillOpacity: 1,
-      })
-        .bindPopup("你嘅位置")
-        .addTo(map);
-      bounds.push([userPos.lat, userPos.lng]);
-    }
-
-    rows.forEach((p, idx) => {
+    rows.forEach((p) => {
       if (!Number.isFinite(p._lat) || !Number.isFinite(p._lng)) return;
       const pc = vacShort(p._pc);
       const m = L.circleMarker([p._lat, p._lng], {
@@ -185,10 +188,12 @@
         fillOpacity: 0.95,
       });
       const dist =
-        p._distance != null ? `<div class="pop-meta">${fmtDist(p._distance)}</div>` : "";
+        p._distance != null
+          ? `<div class="pop-meta">${fmtDist(p._distance)}</div>`
+          : "";
       m.bindPopup(
-        `<div class="pop-name">${esc(p.name)}</div>` +
-          `<div class="pop-meta">私家車空位：${esc(pc)}</div>${dist}`
+        `<div class="pop-name">${esc(shortName(p.name))}</div>` +
+          `<div class="pop-meta">空位 ${esc(pc)}</div>${dist}`
       );
       m.on("click", () => highlightCard(String(p.park_Id)));
       m.addTo(markersLayer);
@@ -198,8 +203,10 @@
 
     if (bounds.length) {
       try {
-        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+        map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
       } catch (_) {}
+    } else if (userPos) {
+      map.setView([userPos.lat, userPos.lng], 15);
     }
     setTimeout(() => map.invalidateSize(), 80);
   }
@@ -208,7 +215,9 @@
     document.querySelectorAll(".park-card.active").forEach((el) =>
       el.classList.remove("active")
     );
-    const card = document.querySelector(`.park-card[data-id="${CSS.escape(id)}"]`);
+    const card = document.querySelector(
+      `.park-card[data-id="${CSS.escape(id)}"]`
+    );
     if (card) {
       card.classList.add("active");
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -273,6 +282,8 @@
 
   function render() {
     const rows = filteredSorted();
+    updateMap(rows);
+
     if (!rows.length) {
       parkRoot.innerHTML =
         `<p class="empty">搵唔到車場。試下改搜尋字或揀其他地區。</p>`;
@@ -282,36 +293,37 @@
       .map((p) => {
         const pc = vacDisplay(p._pc);
         const mc = p._mc ? vacDisplay(p._mc) : null;
-        const ht = heightText(p.heightLimits);
-        const closed = String(p.opening_status || "").toUpperCase() === "CLOSED";
+        const closed =
+          String(p.opening_status || "").toUpperCase() === "CLOSED";
+        const distChip =
+          p._distance != null
+            ? `<span class="chip dist">${esc(fmtDist(p._distance))}</span>`
+            : "";
+        const statusChip = closed
+          ? `<span class="chip closed">休息</span>`
+          : "";
         return `
-<article class="park-card${closed ? " closed" : ""}" data-id="${esc(p.park_Id)}" tabindex="0">
+<article class="park-card${closed ? " closed" : ""}" data-id="${esc(p.park_Id)}" tabindex="0" title="${esc(p.name)}">
   <div class="vac-stack">
     <div class="vac-badge ${pc.cls}" title="${esc(pc.title)}">
       ${esc(pc.text)}
-      <span class="lbl">私家車</span>
+      <span class="lbl">車</span>
     </div>
     ${
       mc
         ? `<div class="vac-badge mc ${mc.cls}" title="${esc(mc.title)}">
       ${esc(mc.text)}
-      <span class="lbl">電單車</span>
+      <span class="lbl">電單</span>
     </div>`
         : ""
     }
   </div>
   <div class="park-body">
-    <h2>${esc(p.name)}</h2>
-    <div class="park-addr">${esc(p.displayAddress || "")}</div>
+    <h2>${esc(shortName(p.name))}</h2>
     <div class="meta-row">
-      ${
-        p._distance != null
-          ? `<span class="chip dist">${esc(fmtDist(p._distance))}</span>`
-          : ""
-      }
-      ${openingChip(p.opening_status)}
+      ${distChip}
+      ${statusChip}
       ${p.district ? `<span class="chip">${esc(p.district)}</span>` : ""}
-      ${ht ? `<span class="chip">${esc(ht)}</span>` : ""}
     </div>
   </div>
 </article>`;
@@ -369,11 +381,12 @@
         userPos = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy || 40,
         };
         geoDenied = false;
-        const acc = Math.round(pos.coords.accuracy || 0);
+        const acc = Math.round(userPos.accuracy);
         setStatus(
-          `已定位（約 ±${acc} m）。顯示附近 ${NEAR_LIMIT} 個參與車場。`,
+          `已定位（約 ±${acc} m）。地圖藍圈＝你 · 黃點＝車場。`,
           "ok"
         );
         btnLocate.disabled = false;
