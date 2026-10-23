@@ -20,6 +20,11 @@
   let userPos = null; // { lat, lng }
   let geoDenied = false;
   let timer = null;
+  let map = null;
+  let markersLayer = null;
+  let userMarker = null;
+  const markerById = new Map();
+
 
   function setStatus(msg, kind = "info") {
     geoStatus.textContent = msg;
@@ -131,6 +136,94 @@
       .replace(/"/g, "&quot;");
   }
 
+
+  function ensureMap() {
+    if (map || typeof L === "undefined") return;
+    map = L.map("map", { zoomControl: true, attributionControl: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+    }).addTo(map);
+    markersLayer = L.layerGroup().addTo(map);
+    map.setView([22.3027, 114.1772], 12);
+  }
+
+  function vacShort(info) {
+    const d = vacDisplay(info);
+    return d.text;
+  }
+
+  function updateMap(rows) {
+    ensureMap();
+    if (!map) return;
+    markersLayer.clearLayers();
+    markerById.clear();
+    const bounds = [];
+
+    if (userPos) {
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.circleMarker([userPos.lat, userPos.lng], {
+        radius: 9,
+        color: "#2a1f14",
+        weight: 3,
+        fillColor: "#5ec8ff",
+        fillOpacity: 1,
+      })
+        .bindPopup("你嘅位置")
+        .addTo(map);
+      bounds.push([userPos.lat, userPos.lng]);
+    }
+
+    rows.forEach((p, idx) => {
+      if (!Number.isFinite(p._lat) || !Number.isFinite(p._lng)) return;
+      const pc = vacShort(p._pc);
+      const m = L.circleMarker([p._lat, p._lng], {
+        radius: 8,
+        color: "#2a1f14",
+        weight: 2,
+        fillColor: "#ffb020",
+        fillOpacity: 0.95,
+      });
+      const dist =
+        p._distance != null ? `<div class="pop-meta">${fmtDist(p._distance)}</div>` : "";
+      m.bindPopup(
+        `<div class="pop-name">${esc(p.name)}</div>` +
+          `<div class="pop-meta">私家車空位：${esc(pc)}</div>${dist}`
+      );
+      m.on("click", () => highlightCard(String(p.park_Id)));
+      m.addTo(markersLayer);
+      markerById.set(String(p.park_Id), m);
+      bounds.push([p._lat, p._lng]);
+    });
+
+    if (bounds.length) {
+      try {
+        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+      } catch (_) {}
+    }
+    setTimeout(() => map.invalidateSize(), 80);
+  }
+
+  function highlightCard(id) {
+    document.querySelectorAll(".park-card.active").forEach((el) =>
+      el.classList.remove("active")
+    );
+    const card = document.querySelector(`.park-card[data-id="${CSS.escape(id)}"]`);
+    if (card) {
+      card.classList.add("active");
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
+  function focusPark(id) {
+    highlightCard(id);
+    const m = markerById.get(String(id));
+    if (m && map) {
+      map.setView(m.getLatLng(), Math.max(map.getZoom(), 15), { animate: true });
+      m.openPopup();
+    }
+  }
+
   function filteredSorted() {
     const q = searchInput.value.trim().toLowerCase();
     const dist = districtSelect.value;
@@ -192,7 +285,7 @@
         const ht = heightText(p.heightLimits);
         const closed = String(p.opening_status || "").toUpperCase() === "CLOSED";
         return `
-<article class="park-card${closed ? " closed" : ""}">
+<article class="park-card${closed ? " closed" : ""}" data-id="${esc(p.park_Id)}" tabindex="0">
   <div class="vac-stack">
     <div class="vac-badge ${pc.cls}" title="${esc(pc.title)}">
       ${esc(pc.text)}
@@ -224,6 +317,15 @@
 </article>`;
       })
       .join("");
+    parkRoot.querySelectorAll(".park-card").forEach((card) => {
+      card.addEventListener("click", () => focusPark(card.dataset.id));
+      card.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          focusPark(card.dataset.id);
+        }
+      });
+    });
   }
 
   function stamp() {
@@ -298,6 +400,7 @@
   }
 
   async function boot() {
+    ensureMap();
     setStatus("載入車場資料…", "info");
     try {
       await Promise.all([loadInfo(), loadVacancy()]);
