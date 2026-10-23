@@ -1,0 +1,324 @@
+(() => {
+  const INFO_URL =
+    "https://api.data.gov.hk/v1/carpark-info-vacancy?data=info&lang=zh_TW";
+  const VAC_URL =
+    "https://api.data.gov.hk/v1/carpark-info-vacancy?data=vacancy&vehicleTypes=privateCar,motorCycle&lang=zh_TW";
+  const AUTO_MS = 45000;
+  const NEAR_LIMIT = 30;
+
+  const $ = (id) => document.getElementById(id);
+  const geoStatus = $("geoStatus");
+  const parkRoot = $("parkRoot");
+  const lastUpdated = $("lastUpdated");
+  const btnLocate = $("btnLocate");
+  const btnRefresh = $("btnRefresh");
+  const searchInput = $("searchInput");
+  const districtSelect = $("districtSelect");
+
+  let parksInfo = [];
+  let vacancyMap = new Map();
+  let userPos = null; // { lat, lng }
+  let geoDenied = false;
+  let timer = null;
+
+  function setStatus(msg, kind = "info") {
+    geoStatus.textContent = msg;
+    geoStatus.className = `geo-status ${kind}`;
+  }
+
+  function haversine(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toR = (d) => (d * Math.PI) / 180;
+    const p1 = toR(lat1);
+    const p2 = toR(lat2);
+    const dp = toR(lat2 - lat1);
+    const dl = toR(lon2 - lon1);
+    const a =
+      Math.sin(dp / 2) ** 2 +
+      Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  function fmtDist(m) {
+    if (m == null || Number.isNaN(m)) return "—";
+    if (m < 1000) return `${Math.round(m)} m`;
+    return `${(m / 1000).toFixed(1)} km`;
+  }
+
+  function pickVac(arr) {
+    if (!arr) return null;
+    const row = Array.isArray(arr) ? arr[0] : arr;
+    if (!row) return null;
+    return {
+      type: row.vacancy_type || "A",
+      vacancy: row.vacancy,
+      lastupdate: row.lastupdate,
+      vacancyEV: row.vacancyEV,
+    };
+  }
+
+  /** Display string + CSS class for vacancy badge */
+  function vacDisplay(info) {
+    if (!info) return { text: "—", cls: "unk", title: "無資料" };
+    const { type, vacancy } = info;
+    if (vacancy == null || vacancy === -1) {
+      return { text: "?", cls: "unk", title: "暫無空位數" };
+    }
+    if (type === "B") {
+      // 0 = full / no space, 1 = has space (common convention)
+      if (vacancy === 0) return { text: "滿", cls: "full", title: "已滿" };
+      if (vacancy === 1) return { text: "有", cls: "ok", title: "尚有空位" };
+      return { text: String(vacancy), cls: "unk", title: "狀態碼" };
+    }
+    if (type === "C") {
+      const n = Number(vacancy);
+      const cls = n <= 0 ? "full" : n < 20 ? "low" : "ok";
+      return { text: `${n}%`, cls, title: "空置率" };
+    }
+    // type A = count
+    const n = Number(vacancy);
+    if (n <= 0) return { text: "0", cls: "full", title: "已滿" };
+    if (n <= 5) return { text: String(n), cls: "low", title: "所餘無幾" };
+    return { text: String(n), cls: "ok", title: "空位數" };
+  }
+
+  function heightText(limits) {
+    if (!Array.isArray(limits) || !limits.length) return null;
+    const h = limits[0];
+    if (h == null || h.height == null) return h?.remark || null;
+    const rem = h.remark ? `（${h.remark}）` : "";
+    return `限高 ${h.height} m${rem}`;
+  }
+
+  function openingChip(status) {
+    if (!status) return "";
+    const open = String(status).toUpperCase() === "OPEN";
+    return `<span class="chip ${open ? "open" : "closed"}">${
+      open ? "開放中" : "已關閉／休息"
+    }</span>`;
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    return res.json();
+  }
+
+  async function loadInfo() {
+    const data = await fetchJson(INFO_URL);
+    parksInfo = Array.isArray(data.results) ? data.results : [];
+    const districts = [
+      ...new Set(parksInfo.map((p) => p.district).filter(Boolean)),
+    ].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+    const cur = districtSelect.value;
+    districtSelect.innerHTML =
+      `<option value="">全部地區</option>` +
+      districts.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
+    if (cur) districtSelect.value = cur;
+  }
+
+  async function loadVacancy() {
+    const data = await fetchJson(VAC_URL);
+    const list = Array.isArray(data.results) ? data.results : [];
+    vacancyMap = new Map(list.map((v) => [String(v.park_Id), v]));
+  }
+
+  function esc(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function filteredSorted() {
+    const q = searchInput.value.trim().toLowerCase();
+    const dist = districtSelect.value;
+    let rows = parksInfo.map((p) => {
+      const lat = Number(p.latitude);
+      const lng = Number(p.longitude);
+      const vac = vacancyMap.get(String(p.park_Id)) || {};
+      let distance = null;
+      if (userPos && Number.isFinite(lat) && Number.isFinite(lng)) {
+        distance = haversine(userPos.lat, userPos.lng, lat, lng);
+      }
+      return {
+        ...p,
+        _lat: lat,
+        _lng: lng,
+        _distance: distance,
+        _pc: pickVac(vac.privateCar),
+        _mc: pickVac(vac.motorCycle),
+      };
+    });
+
+    if (dist) rows = rows.filter((p) => p.district === dist);
+    if (q) {
+      rows = rows.filter((p) => {
+        const blob = `${p.name || ""} ${p.displayAddress || ""} ${
+          p.district || ""
+        }`.toLowerCase();
+        return blob.includes(q);
+      });
+    }
+
+    if (userPos) {
+      rows.sort(
+        (a, b) =>
+          (a._distance ?? Infinity) - (b._distance ?? Infinity) ||
+          String(a.name).localeCompare(String(b.name), "zh-Hant")
+      );
+      if (!q && !dist) rows = rows.slice(0, NEAR_LIMIT);
+    } else {
+      rows.sort((a, b) =>
+        String(a.name).localeCompare(String(b.name), "zh-Hant")
+      );
+      if (!q && !dist) rows = rows.slice(0, 40);
+    }
+    return rows;
+  }
+
+  function render() {
+    const rows = filteredSorted();
+    if (!rows.length) {
+      parkRoot.innerHTML =
+        `<p class="empty">搵唔到車場。試下改搜尋字或揀其他地區。</p>`;
+      return;
+    }
+    parkRoot.innerHTML = rows
+      .map((p) => {
+        const pc = vacDisplay(p._pc);
+        const mc = p._mc ? vacDisplay(p._mc) : null;
+        const ht = heightText(p.heightLimits);
+        const closed = String(p.opening_status || "").toUpperCase() === "CLOSED";
+        return `
+<article class="park-card${closed ? " closed" : ""}">
+  <div class="vac-stack">
+    <div class="vac-badge ${pc.cls}" title="${esc(pc.title)}">
+      ${esc(pc.text)}
+      <span class="lbl">私家車</span>
+    </div>
+    ${
+      mc
+        ? `<div class="vac-badge mc ${mc.cls}" title="${esc(mc.title)}">
+      ${esc(mc.text)}
+      <span class="lbl">電單車</span>
+    </div>`
+        : ""
+    }
+  </div>
+  <div class="park-body">
+    <h2>${esc(p.name)}</h2>
+    <div class="park-addr">${esc(p.displayAddress || "")}</div>
+    <div class="meta-row">
+      ${
+        p._distance != null
+          ? `<span class="chip dist">${esc(fmtDist(p._distance))}</span>`
+          : ""
+      }
+      ${openingChip(p.opening_status)}
+      ${p.district ? `<span class="chip">${esc(p.district)}</span>` : ""}
+      ${ht ? `<span class="chip">${esc(ht)}</span>` : ""}
+    </div>
+  </div>
+</article>`;
+      })
+      .join("");
+  }
+
+  function stamp() {
+    const now = new Date();
+    const hk = now.toLocaleString("zh-HK", {
+      timeZone: "Asia/Hong_Kong",
+      hour12: false,
+    });
+    lastUpdated.textContent = `上次更新：${hk}（香港時間）`;
+  }
+
+  async function refreshVacancyOnly() {
+    btnRefresh.disabled = true;
+    parkRoot.classList.add("loading");
+    try {
+      await loadVacancy();
+      render();
+      stamp();
+    } catch (e) {
+      setStatus(`刷新空位失敗：${e.message}`, "warn");
+    } finally {
+      btnRefresh.disabled = false;
+      parkRoot.classList.remove("loading");
+    }
+  }
+
+  function locate() {
+    if (!navigator.geolocation) {
+      geoDenied = true;
+      setStatus(
+        "瀏覽器唔支援定位。可用地區篩選或搜尋車場名稱。",
+        "warn"
+      );
+      render();
+      return;
+    }
+    setStatus("定位中…", "info");
+    btnLocate.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        userPos = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        };
+        geoDenied = false;
+        const acc = Math.round(pos.coords.accuracy || 0);
+        setStatus(
+          `已定位（約 ±${acc} m）。顯示附近 ${NEAR_LIMIT} 個參與車場。`,
+          "ok"
+        );
+        btnLocate.disabled = false;
+        render();
+      },
+      (err) => {
+        geoDenied = true;
+        userPos = null;
+        const reason =
+          err.code === 1
+            ? "你拒絕咗定位權限"
+            : err.code === 2
+              ? "暫時拎唔到位置"
+              : "定位逾時";
+        setStatus(
+          `${reason}。可用「地區」篩選或搜尋名稱睇空位。`,
+          "warn"
+        );
+        btnLocate.disabled = false;
+        render();
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
+    );
+  }
+
+  async function boot() {
+    setStatus("載入車場資料…", "info");
+    try {
+      await Promise.all([loadInfo(), loadVacancy()]);
+      setStatus(
+        `已載入 ${parksInfo.length} 個參與車場。正在定位…`,
+        "info"
+      );
+      stamp();
+      render();
+      locate();
+      if (timer) clearInterval(timer);
+      timer = setInterval(refreshVacancyOnly, AUTO_MS);
+    } catch (e) {
+      setStatus(`載入失敗：${e.message}。請檢查網絡後再刷新。`, "warn");
+    }
+  }
+
+  btnLocate.addEventListener("click", locate);
+  btnRefresh.addEventListener("click", refreshVacancyOnly);
+  searchInput.addEventListener("input", () => render());
+  districtSelect.addEventListener("change", () => render());
+
+  boot();
+})();

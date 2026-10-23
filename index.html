@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-HK">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#eef6ff" />
+  <title>Tool002 · 附近泊位</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>附近泊位</h1>
+      <p class="tagline">定位搵附近車場，睇私家車／電單車空位</p>
+      <p class="creator">Creator: Paper P.</p>
+    </header>
+
+    <div class="toolbar">
+      <button type="button" id="btnLocate">重新定位</button>
+      <button type="button" id="btnRefresh" class="secondary">立即刷新</button>
+      <input type="search" id="searchInput" placeholder="搜尋車場名稱／地址…" aria-label="搜尋車場" />
+      <select id="districtSelect" aria-label="篩選地區">
+        <option value="">全部地區</option>
+      </select>
+    </div>
+
+    <div id="geoStatus" class="geo-status info" role="status">載入中…</div>
+
+    <main id="parkRoot" aria-live="polite"></main>
+    <p id="lastUpdated" class="footer-meta"></p>
+
+    <p class="hint">
+      資料來源：data.gov.hk 停車場空位 API（約 580 個參與車場）。
+      唔係全港所有車場都有份；空位數字可能有延遲，僅供參考。
+      約每 45 秒自動刷新。定位需瀏覽器權限；唔准定位可用地區篩選或搜尋。
+    </p>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
